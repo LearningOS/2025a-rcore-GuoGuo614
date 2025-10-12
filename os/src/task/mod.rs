@@ -21,6 +21,8 @@ use alloc::vec::Vec;
 use lazy_static::*;
 use switch::__switch;
 pub use task::{TaskControlBlock, TaskStatus};
+use crate::config::PAGE_SIZE;
+use crate::mm::MapPermission;
 
 pub use context::TaskContext;
 
@@ -153,6 +155,54 @@ impl TaskManager {
             panic!("All applications completed!");
         }
     }
+
+    fn increase_syscall(&self, syscall_id: usize) {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].syscall_map.entry(syscall_id).and_modify(|v| *v += 1).or_insert(1);
+    }
+
+    fn trace_syscall(&self, syscall_id: usize) -> isize {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        match inner.tasks[current].syscall_map.get(&syscall_id) {
+            Some(times) => *times as isize,
+            None => 0
+        }
+    }
+
+    fn mmap(&self, start_va: usize, len: usize, prot: usize) -> isize {
+        if start_va % PAGE_SIZE != 0 {
+            return -1;
+        }
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let page_count = (len + PAGE_SIZE - 1) / PAGE_SIZE;
+        let end_va = start_va + page_count * PAGE_SIZE;
+
+        let mut perm = MapPermission::empty() | MapPermission::U;
+        if prot & (1 << 0) != 0 { perm |= MapPermission::R; }
+        if prot & (1 << 1) != 0 { perm |= MapPermission::W; }
+        if prot & (1 << 2) != 0 { perm |= MapPermission::X; }
+
+        inner.tasks[current].memory_set.insert_framed_area_checked(start_va.into(), end_va.into(), perm)
+        // match inner.tasks[current].change_program_brk((page_count * PAGE_SIZE).try_into().unwrap()) {
+        //     None => -1,
+        //     Some(_) => 0
+        // }
+    }
+
+    fn munmap(&self, start_va: usize, len: usize) -> isize {
+        if start_va % PAGE_SIZE != 0 {
+            return -1
+        }
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let page_count = (len + PAGE_SIZE - 1) / PAGE_SIZE;
+        let end_va = start_va + page_count * PAGE_SIZE;
+
+        inner.tasks[current].memory_set.remove_framed_area_checked(start_va.into(), end_va.into())
+    }
 }
 
 /// Run the first task in task list.
@@ -201,4 +251,24 @@ pub fn current_trap_cx() -> &'static mut TrapContext {
 /// Change the current 'Running' task's program break
 pub fn change_program_brk(size: i32) -> Option<usize> {
     TASK_MANAGER.change_current_program_brk(size)
+}
+
+/// Increase the counter for syscall
+pub fn increase_syscall(id: usize) {
+    TASK_MANAGER.increase_syscall(id);
+}
+
+/// Get the id(th) task's syscall times
+pub fn trace_syscall(id: usize) -> isize {
+    TASK_MANAGER.trace_syscall(id)
+}
+
+/// Alloc memory and map it
+pub fn mmap(start: usize, len: usize, prot: usize) -> isize {
+    TASK_MANAGER.mmap(start, len, prot)
+}
+
+/// Unmap a MapArea
+pub fn munmap(start: usize, len: usize) -> isize {
+    TASK_MANAGER.munmap(start, len)
 }

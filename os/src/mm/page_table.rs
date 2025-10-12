@@ -70,6 +70,10 @@ impl PageTableEntry {
     pub fn executable(&self) -> bool {
         (self.flags() & PTEFlags::X) != PTEFlags::empty()
     }
+    /// The page pointered by page table entry is user_accessable?
+    pub fn is_user(&self) -> bool {
+        (self.flags() & PTEFlags::U) != PTEFlags::empty()
+    }
 }
 
 /// page table structure
@@ -178,4 +182,45 @@ pub fn translated_byte_buffer(token: usize, ptr: *const u8, len: usize) -> Vec<&
         start = end_va.into();
     }
     v
+}
+
+/// Translate a const raw pointer
+pub fn translated_const_ptr(token: usize, ptr: *const u8) -> Option<*const u8> {
+    // if ptr as usize > crate::config::USER_VA_TOP {
+    //     return None;
+    // }
+    let page_table = PageTable::from_token(token);
+    let vpn = VirtAddr::from(ptr as usize).floor();
+    let pte = page_table.translate(vpn);
+    match pte {
+        None => None,
+        Some(pte) => {
+            // println!("PPN: {}", pte.ppn().0);
+            if !pte.readable() || !pte.is_valid() || !pte.is_user() {
+                None
+            } else {
+                let offset = VirtAddr::from(ptr as usize).page_offset();
+                Some(pte.ppn().get_bytes_array().as_ptr().wrapping_add(offset))
+            }
+        }
+    }
+}
+
+/// Translate a mut raw pointer
+pub fn translated_mut_ptr(token: usize, ptr: *mut u8) -> Option<*mut u8> {
+    let page_table = PageTable::from_token(token);
+    let vpn = VirtAddr::from(ptr as usize).floor();
+    let pte = page_table.translate(vpn);
+    match pte {
+        None => None,
+        Some(pte) => {
+            // println!("PPN: {}", pte.ppn().0);
+            if !pte.writable() || !pte.is_valid() || !pte.is_user() {
+                None
+            } else {
+                let offset = VirtAddr::from(ptr as usize).page_offset();
+                Some(pte.ppn().get_bytes_array().as_mut_ptr().wrapping_add(offset))
+            }
+        }
+    }
 }
