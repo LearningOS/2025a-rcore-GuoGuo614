@@ -9,6 +9,8 @@ use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
 use core::cell::RefMut;
 
+pub const BIG_STRIDE: usize = 100_000;
+
 /// Task control block structure
 ///
 /// Directly save the contents that will not change during running
@@ -68,6 +70,12 @@ pub struct TaskControlBlockInner {
 
     /// Program break
     pub program_brk: usize,
+
+    /// Priority
+    pub prio: isize,
+
+    /// Stride
+    pub stride: usize,
 }
 
 impl TaskControlBlockInner {
@@ -84,6 +92,9 @@ impl TaskControlBlockInner {
     }
     pub fn is_zombie(&self) -> bool {
         self.get_status() == TaskStatus::Zombie
+    }
+    pub fn update_stride(&mut self) {
+        self.stride += BIG_STRIDE / self.prio as usize;
     }
 }
 
@@ -118,6 +129,8 @@ impl TaskControlBlock {
                     exit_code: 0,
                     heap_bottom: user_sp,
                     program_brk: user_sp,
+                    prio: 16,
+                    stride: 0,
                 })
             },
         };
@@ -191,6 +204,8 @@ impl TaskControlBlock {
                     exit_code: 0,
                     heap_bottom: parent_inner.heap_bottom,
                     program_brk: parent_inner.program_brk,
+                    prio: 16,
+                    stride: 0,
                 })
             },
         });
@@ -204,6 +219,15 @@ impl TaskControlBlock {
         task_control_block
         // **** release child PCB
         // ---- release parent PCB
+    }
+
+    /// parent process spawn a child process
+    pub fn spawn(self: &Arc<Self>, elf_data: &[u8]) -> Arc<Self> {
+        let mut parent_inner = self.inner_exclusive_access();
+        let child = Arc::new(TaskControlBlock::new(elf_data));
+        child.inner_exclusive_access().parent = Some(Arc::downgrade(self));
+        parent_inner.children.push(child.clone());
+        child
     }
 
     /// get pid of process
